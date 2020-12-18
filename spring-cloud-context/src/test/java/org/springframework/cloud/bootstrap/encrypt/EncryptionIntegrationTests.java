@@ -19,6 +19,7 @@ package org.springframework.cloud.bootstrap.encrypt;
 import org.junit.Test;
 
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -67,7 +68,7 @@ public class EncryptionIntegrationTests {
 
 	@Test
 	public void symmetricPropertyValues() {
-		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
+		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestAutoConfiguration.class)
 				.web(WebApplicationType.NONE).properties("spring.config.use-legacy-processing=false", "encrypt.key:pie",
 						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
 				.run();
@@ -76,7 +77,7 @@ public class EncryptionIntegrationTests {
 
 	@Test
 	public void symmetricConfigurationProperties() {
-		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
+		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestAutoConfiguration.class)
 				.web(WebApplicationType.NONE).properties("spring.config.use-legacy-processing=false", "encrypt.key:pie",
 						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
 				.run();
@@ -86,6 +87,13 @@ public class EncryptionIntegrationTests {
 	@Configuration(proxyBeanMethods = false)
 	@EnableConfigurationProperties(PasswordProperties.class)
 	protected static class TestConfiguration {
+
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	@EnableAutoConfiguration
+	@EnableConfigurationProperties(PasswordProperties.class)
+	protected static class TestAutoConfiguration {
 
 	}
 
