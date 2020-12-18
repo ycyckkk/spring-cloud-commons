@@ -19,20 +19,19 @@ package org.springframework.cloud.bootstrap.encrypt;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import org.springframework.cloud.bootstrap.BootstrapApplicationListener;
-import org.springframework.cloud.context.environment.EnvironmentChangeEvent;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.ApplicationContextInitializer;
-import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.cloud.bootstrap.TextEncryptorConfigBootstrapper;
+import org.springframework.cloud.bootstrap.TextEncryptorConfigBootstrapper.FailsafeTextEncryptor;
+import org.springframework.cloud.context.encrypt.EncryptorFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.CompositePropertySource;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -42,7 +41,9 @@ import org.springframework.core.env.PropertySource;
 import org.springframework.core.env.PropertySources;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.security.crypto.encrypt.TextEncryptor;
+import org.springframework.util.ClassUtils;
 
+import static org.springframework.cloud.bootstrap.TextEncryptorConfigBootstrapper.keysConfigured;
 import static org.springframework.cloud.util.PropertyUtils.bootstrapEnabled;
 import static org.springframework.cloud.util.PropertyUtils.useLegacyProcessing;
 
@@ -53,18 +54,12 @@ import static org.springframework.cloud.util.PropertyUtils.useLegacyProcessing;
  * @author Dave Syer
  * @author Tim Ysewyn
  */
-public class EnvironmentDecryptApplicationInitializer
-		implements ApplicationContextInitializer<ConfigurableApplicationContext>, Ordered {
+public class DecryptEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
 	/**
 	 * Name of the decrypted property source.
 	 */
 	public static final String DECRYPTED_PROPERTY_SOURCE_NAME = "decrypted";
-
-	/**
-	 * Name of the decrypted bootstrap property source.
-	 */
-	public static final String DECRYPTED_BOOTSTRAP_PROPERTY_SOURCE_NAME = "decryptedBootstrap";
 
 	/**
 	 * Prefix indicating an encrypted value.
@@ -73,11 +68,9 @@ public class EnvironmentDecryptApplicationInitializer
 
 	private static final Pattern COLLECTION_PROPERTY = Pattern.compile("(\\S+)?\\[(\\d+)\\](\\.\\S+)?");
 
-	private static Log logger = LogFactory.getLog(EnvironmentDecryptApplicationInitializer.class);
+	private static Log logger = LogFactory.getLog(DecryptEnvironmentPostProcessor.class);
 
-	private int order = Ordered.HIGHEST_PRECEDENCE + 15;
-
-	private TextEncryptor encryptor;
+	private int order = Ordered.LOWEST_PRECEDENCE;
 
 	private boolean failOnError = true;
 
@@ -87,10 +80,6 @@ public class EnvironmentDecryptApplicationInitializer
 	 */
 	public void setFailOnError(boolean failOnError) {
 		this.failOnError = failOnError;
-	}
-
-	public EnvironmentDecryptApplicationInitializer(TextEncryptor encryptor) {
-		this.encryptor = encryptor;
 	}
 
 	@Override
@@ -103,92 +92,45 @@ public class EnvironmentDecryptApplicationInitializer
 	}
 
 	@Override
-	public void initialize(ConfigurableApplicationContext applicationContext) {
-		ConfigurableEnvironment environment = applicationContext.getEnvironment();
-		if (!bootstrapEnabled(environment) && !useLegacyProcessing(environment)) {
+	public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+		if (bootstrapEnabled(environment) || useLegacyProcessing(environment)) {
 			return;
 		}
 
 		MutablePropertySources propertySources = environment.getPropertySources();
 
-		Set<String> found = new LinkedHashSet<>();
-		if (!propertySources.contains(DECRYPTED_BOOTSTRAP_PROPERTY_SOURCE_NAME)) {
-			// No reason to decrypt bootstrap twice
-			PropertySource<?> bootstrap = propertySources
-					.get(BootstrapApplicationListener.BOOTSTRAP_PROPERTY_SOURCE_NAME);
-			if (bootstrap != null) {
-				Map<String, Object> map = decrypt(bootstrap);
-				if (!map.isEmpty()) {
-					found.addAll(map.keySet());
-					insert(applicationContext,
-							new SystemEnvironmentPropertySource(DECRYPTED_BOOTSTRAP_PROPERTY_SOURCE_NAME, map));
-				}
-			}
-		}
-		removeDecryptedProperties(applicationContext);
-		Map<String, Object> map = decrypt(propertySources);
+		environment.getPropertySources().remove(DECRYPTED_PROPERTY_SOURCE_NAME);
+
+		TextEncryptor encryptor = getTextEncryptor(environment);
+
+		Map<String, Object> map = decrypt(encryptor, propertySources);
 		if (!map.isEmpty()) {
 			// We have some decrypted properties
-			found.addAll(map.keySet());
-			insert(applicationContext, new SystemEnvironmentPropertySource(DECRYPTED_PROPERTY_SOURCE_NAME, map));
+			propertySources.addFirst(new SystemEnvironmentPropertySource(DECRYPTED_PROPERTY_SOURCE_NAME, map));
 		}
-		if (!found.isEmpty()) {
-			ApplicationContext parent = applicationContext.getParent();
-			if (parent != null) {
-				// The parent is actually the bootstrap context, and it is fully
-				// initialized, so we can fire an EnvironmentChangeEvent there to rebind
-				// @ConfigurationProperties, in case they were encrypted.
-				parent.publishEvent(new EnvironmentChangeEvent(parent, found));
-			}
 
-		}
 	}
 
-	private void insert(ApplicationContext applicationContext, PropertySource<?> propertySource) {
-		ApplicationContext parent = applicationContext;
-		while (parent != null) {
-			if (parent.getEnvironment() instanceof ConfigurableEnvironment) {
-				ConfigurableEnvironment mutable = (ConfigurableEnvironment) parent.getEnvironment();
-				insert(mutable.getPropertySources(), propertySource);
+	protected TextEncryptor getTextEncryptor(ConfigurableEnvironment environment) {
+		Binder binder = Binder.get(environment);
+		KeyProperties keyProperties = binder.bind(KeyProperties.PREFIX, KeyProperties.class)
+				.orElseGet(KeyProperties::new);
+		if (keysConfigured(keyProperties)) {
+
+			if (ClassUtils.isPresent("org.springframework.security.rsa.crypto.RsaSecretEncryptor", null)) {
+				RsaProperties rsaProperties = binder.bind(RsaProperties.PREFIX, RsaProperties.class)
+						.orElseGet(RsaProperties::new);
+				return TextEncryptorConfigBootstrapper.rsaTextEncryptor(keyProperties, rsaProperties);
 			}
-			parent = parent.getParent();
+			return new EncryptorFactory(keyProperties.getSalt()).create(keyProperties.getKey());
 		}
+		// no keys configured
+		return new FailsafeTextEncryptor();
 	}
 
-	private void insert(MutablePropertySources propertySources, PropertySource<?> propertySource) {
-		if (propertySources.contains(BootstrapApplicationListener.BOOTSTRAP_PROPERTY_SOURCE_NAME)) {
-			if (DECRYPTED_BOOTSTRAP_PROPERTY_SOURCE_NAME.equals(propertySource.getName())) {
-				propertySources.addBefore(BootstrapApplicationListener.BOOTSTRAP_PROPERTY_SOURCE_NAME, propertySource);
-			}
-			else {
-				propertySources.addAfter(BootstrapApplicationListener.BOOTSTRAP_PROPERTY_SOURCE_NAME, propertySource);
-			}
-		}
-		else {
-			propertySources.addFirst(propertySource);
-		}
-	}
-
-	private void removeDecryptedProperties(ApplicationContext applicationContext) {
-		ApplicationContext parent = applicationContext;
-		while (parent != null) {
-			if (parent.getEnvironment() instanceof ConfigurableEnvironment) {
-				((ConfigurableEnvironment) parent.getEnvironment()).getPropertySources()
-						.remove(DECRYPTED_PROPERTY_SOURCE_NAME);
-			}
-			parent = parent.getParent();
-		}
-	}
-
-	public Map<String, Object> decrypt(PropertySources propertySources) {
+	public Map<String, Object> decrypt(TextEncryptor encryptor, PropertySources propertySources) {
 		Map<String, Object> properties = merge(propertySources);
-		decrypt(properties);
-		return properties;
-	}
-
-	private Map<String, Object> decrypt(PropertySource<?> source) {
-		Map<String, Object> properties = merge(source);
-		decrypt(properties);
+		decrypt(encryptor, properties);
 		return properties;
 	}
 
@@ -201,12 +143,6 @@ public class EnvironmentDecryptApplicationInitializer
 		for (PropertySource<?> source : sources) {
 			merge(source, properties);
 		}
-		return properties;
-	}
-
-	private Map<String, Object> merge(PropertySource<?> source) {
-		Map<String, Object> properties = new LinkedHashMap<>();
-		merge(source, properties);
 		return properties;
 	}
 
@@ -255,20 +191,20 @@ public class EnvironmentDecryptApplicationInitializer
 		}
 	}
 
-	private void decrypt(Map<String, Object> properties) {
+	private void decrypt(TextEncryptor encryptor, Map<String, Object> properties) {
 		properties.replaceAll((key, value) -> {
 			String valueString = value.toString();
 			if (!valueString.startsWith(ENCRYPTED_PROPERTY_PREFIX)) {
 				return value;
 			}
-			return decrypt(key, valueString);
+			return decrypt(encryptor, key, valueString);
 		});
 	}
 
-	private String decrypt(String key, String original) {
+	private String decrypt(TextEncryptor encryptor, String key, String original) {
 		String value = original.substring(ENCRYPTED_PROPERTY_PREFIX.length());
 		try {
-			value = this.encryptor.decrypt(value);
+			value = encryptor.decrypt(value);
 			if (logger.isDebugEnabled()) {
 				logger.debug("Decrypted: key=" + key);
 			}
