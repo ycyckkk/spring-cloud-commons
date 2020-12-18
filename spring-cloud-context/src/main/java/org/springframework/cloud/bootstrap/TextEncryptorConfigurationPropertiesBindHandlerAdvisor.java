@@ -29,7 +29,8 @@ import org.springframework.cloud.bootstrap.encrypt.KeyProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.security.crypto.encrypt.TextEncryptor;
 
-public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor implements ConfigurationPropertiesBindHandlerAdvisor {
+public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor
+		implements ConfigurationPropertiesBindHandlerAdvisor {
 
 	private final ApplicationContext applicationContext;
 
@@ -39,12 +40,14 @@ public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor implements C
 
 	@Override
 	public BindHandler apply(BindHandler bindHandler) {
-		return wrappedBindHandler(bindHandler);
+		return wrappedBindHandler(bindHandler, this.applicationContext.getBean(KeyProperties.class),
+				this.applicationContext.getBeanProvider(TextEncryptor.class)
+						.getIfAvailable(FailsafeTextEncryptor::new));
 	}
 
-	private BindHandler wrappedBindHandler(BindHandler handler) {
-		KeyProperties keyProperties = this.applicationContext.getBean(KeyProperties.class);
-		TextEncryptorBindHandler textEncryptorBindHandler = new TextEncryptorBindHandler(this.applicationContext.getBeanProvider(TextEncryptor.class).getIfAvailable(FailsafeTextEncryptor::new), keyProperties);
+	static BindHandler wrappedBindHandler(BindHandler handler, KeyProperties keyProperties,
+			TextEncryptor textEncryptor) {
+		TextEncryptorBindHandler textEncryptorBindHandler = new TextEncryptorBindHandler(textEncryptor, keyProperties);
 		return new BindHandler() {
 			@Override
 			public <T> Bindable<T> onStart(ConfigurationPropertyName name, Bindable<T> target, BindContext context) {
@@ -52,23 +55,27 @@ public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor implements C
 			}
 
 			@Override
-			public Object onSuccess(ConfigurationPropertyName name, Bindable<?> target, BindContext context, Object result) {
+			public Object onSuccess(ConfigurationPropertyName name, Bindable<?> target, BindContext context,
+					Object result) {
 				Object defaultHandlerResult = handler.onSuccess(name, target, context, result);
 				return textEncryptorBindHandler.onSuccess(name, target, context, defaultHandlerResult);
 			}
 
 			@Override
-			public Object onCreate(ConfigurationPropertyName name, Bindable<?> target, BindContext context, Object result) {
+			public Object onCreate(ConfigurationPropertyName name, Bindable<?> target, BindContext context,
+					Object result) {
 				return handler.onCreate(name, target, context, result);
 			}
 
 			@Override
-			public Object onFailure(ConfigurationPropertyName name, Bindable<?> target, BindContext context, Exception error) throws Exception {
+			public Object onFailure(ConfigurationPropertyName name, Bindable<?> target, BindContext context,
+					Exception error) throws Exception {
 				return handler.onFailure(name, target, context, error);
 			}
 
 			@Override
-			public void onFinish(ConfigurationPropertyName name, Bindable<?> target, BindContext context, Object result) throws Exception {
+			public void onFinish(ConfigurationPropertyName name, Bindable<?> target, BindContext context, Object result)
+					throws Exception {
 				handler.onFinish(name, target, context, result);
 			}
 		};
@@ -97,7 +104,7 @@ public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor implements C
 
 	}
 
-	protected static class TextEncryptorBindHandler extends AbstractBindHandler {
+	static class TextEncryptorBindHandler extends AbstractBindHandler {
 
 		private static final Log logger = LogFactory.getLog(TextEncryptorBindHandler.class);
 
@@ -110,14 +117,15 @@ public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor implements C
 
 		private final KeyProperties keyProperties;
 
-		public TextEncryptorBindHandler(TextEncryptor textEncryptor, KeyProperties keyProperties) {
+		TextEncryptorBindHandler(TextEncryptor textEncryptor, KeyProperties keyProperties) {
 			this.textEncryptor = textEncryptor;
 			this.keyProperties = keyProperties;
 		}
 
 		@Override
-		public Object onSuccess(ConfigurationPropertyName name, Bindable<?> target, BindContext context, Object result) {
-			if (result instanceof String) {
+		public Object onSuccess(ConfigurationPropertyName name, Bindable<?> target, BindContext context,
+				Object result) {
+			if (result instanceof String && ((String) result).startsWith(ENCRYPTED_PROPERTY_PREFIX)) {
 				return decrypt(name.toString(), (String) result);
 			}
 			return result;
@@ -146,5 +154,7 @@ public class TextEncryptorConfigurationPropertiesBindHandlerAdvisor implements C
 				return "";
 			}
 		}
+
 	}
+
 }
