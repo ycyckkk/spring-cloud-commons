@@ -30,7 +30,7 @@ import static org.assertj.core.api.BDDAssertions.then;
 public class EncryptionIntegrationTests {
 
 	@Test
-	public void symmetricPropertyValues() {
+	public void legacySymmetricPropertyValues() {
 		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
 				.web(WebApplicationType.NONE).properties("spring.config.use-legacy-processing=true", "encrypt.key:pie",
 						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
@@ -39,9 +39,45 @@ public class EncryptionIntegrationTests {
 	}
 
 	@Test
-	public void symmetricConfigurationProperties() {
+	public void legacySymmetricConfigurationProperties() {
 		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
 				.web(WebApplicationType.NONE).properties("spring.config.use-legacy-processing=true", "encrypt.key:pie",
+						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
+				.run();
+		then(context.getBean(PasswordProperties.class).getPassword()).isEqualTo("test");
+	}
+
+	@Test
+	public void propSymmetricPropertyValues() {
+		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
+				.web(WebApplicationType.NONE).properties("spring.cloud.bootstrap.enabled=true", "encrypt.key:pie",
+						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
+				.run();
+		then(context.getEnvironment().getProperty("foo.password")).isEqualTo("test");
+	}
+
+	@Test
+	public void propSymmetricConfigurationProperties() {
+		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
+				.web(WebApplicationType.NONE).properties("spring.cloud.bootstrap.enabled=true", "encrypt.key:pie",
+						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
+				.run();
+		then(context.getBean(PasswordProperties.class).getPassword()).isEqualTo("test");
+	}
+
+	@Test
+	public void symmetricPropertyValues() {
+		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
+				.web(WebApplicationType.NONE).properties("spring.config.use-legacy-processing=false", "encrypt.key:pie",
+						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
+				.run();
+		then(context.getEnvironment().getProperty("foo.password")).isEqualTo("test");
+	}
+
+	@Test
+	public void symmetricConfigurationProperties() {
+		ConfigurableApplicationContext context = new SpringApplicationBuilder(TestConfiguration.class)
+				.web(WebApplicationType.NONE).properties("spring.config.use-legacy-processing=false", "encrypt.key:pie",
 						"foo.password:{cipher}bf29452295df354e6153c5b31b03ef23c70e55fba24299aa85c63438f1c43c95")
 				.run();
 		then(context.getBean(PasswordProperties.class).getPassword()).isEqualTo("test");
